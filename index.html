@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>ПСИХОРЕАКТИВНЫЙ ДВИЖОК</title>
+</head>
+<body>
+<div id="launcher-container">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@900&display=swap');
+        body, html { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
+        #launcher-container { display:flex; align-items:center; justify-content:center; width:100%; height:100%; text-align:center; }
+        #launch-button {
+            font-family:'Orbitron',sans-serif; font-size:3rem; color:#ff2d2d; background:transparent;
+            border:3px solid #ff2d2d; padding:2rem 4rem; cursor:pointer; text-shadow:0 0 15px #ff2d2d;
+            transition:all 0.3s ease; animation:pulse 2s infinite;
+        }
+        #launch-button:hover { background:#ff2d2d; color:#000; text-shadow:none; animation:none; }
+        @keyframes pulse { 0%{box-shadow:0 0 20px 0 #ff2d2d99} 50%{box-shadow:0 0 40px 15px #ff2d2d44} 100%{box-shadow:0 0 20px 0 #ff2d2d99} }
+    </style>
+    <button id="launch-button">ЗАПУСТИТЬ ДВИЖОК</button>
+</div>
+
+<script type="text/template" id="horror-payload">
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <title>...</title>
+        <style>
+            body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; cursor: none; }
+            #main_canvas { position: absolute; top: 0; left: 0; }
+            #loader {
+                position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                color: white; font-size: 2rem; font-family: monospace; z-index: 100;
+                text-align: center; text-shadow: 0 0 10px red;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="loader">ИНИЦИАЛИЗАЦИЯ...</div>
+        <video id="input_video" style="display: none;"></video>
+        <canvas id="main_canvas"></canvas>
+
+        <script type="module">
+            // Импортируем все необходимое из библиотеки Three.js
+            import * as THREE from 'https://cdn.skypack.dev/three@0.137.5';
+            import { EffectComposer } from 'https://cdn.skypack.dev/three@0.137.5/examples/jsm/postprocessing/EffectComposer.js';
+            import { RenderPass } from 'https://cdn.skypack.dev/three@0.137.5/examples/jsm/postprocessing/RenderPass.js';
+            import { UnrealBloomPass } from 'https://cdn.skypack.dev/three@0.137.5/examples/jsm/postprocessing/UnrealBloomPass.js';
+            import { AfterimagePass } from 'https://cdn.skypack.dev/three@0.137.5/examples/jsm/postprocessing/AfterimagePass.js';
+            import { ShaderPass } from 'https://cdn.skypack.dev/three@0.137.5/examples/jsm/postprocessing/ShaderPass.js';
+            import { SobelOperatorShader } from 'https://cdn.skypack.dev/three@0.137.5/examples/jsm/shaders/SobelOperatorShader.js';
+
+            // --- Главный класс движка ---
+            class PsychoreactiveEngine {
+                constructor() {
+                    // --- DOM Элементы ---
+                    this.video = document.getElementById('input_video');
+                    this.canvas = document.getElementById('main_canvas');
+                    this.loader = document.getElementById('loader');
+
+                    // --- Three.js Основа ---
+                    this.scene = new THREE.Scene();
+                    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+                    this.clock = new THREE.Clock();
+
+                    // --- Аудио ---
+                    this.audioCtx = null;
+                    this.analyser = null;
+                    this.audioData = null;
+
+                    // --- Пост-обработка ---
+                    this.composer = new EffectComposer(this.renderer);
+                    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+                    this.afterimagePass = new AfterimagePass();
+                    this.sobelPass = new ShaderPass(SobelOperatorShader);
+                    
+                    // --- Сегментация ---
+                    this.segmentation = null;
+                    this.personMaskTexture = null;
+                    this.personVideoTexture = null;
+
+                    // --- Объекты сцены ---
+                    this.backgroundPlane = null;
+                    this.personPlane = null;
+                    
+                    this.log('Движок создан.');
+                }
+
+                log(message) { console.log(`[PSY-CORE]: ${message}`); }
+                showLoader(text) { this.loader.textContent = text; }
+
+                // --- Инициализация ---
+                async initialize() {
+                    this.setupRenderer();
+                    
+                    this.showLoader('ЗАПРОС ДОСТУПА К ОБОРУДОВАНИЮ...');
+                    await this.setupMedia();
+                    
+                    this.showLoader('ЗАГРУЗКА НЕЙРОСЕТЕЙ...');
+                    await this.setupSegmentation();
+                    
+                    this.setupScene();
+                    this.setupPostProcessing();
+                    
+                    this.loader.style.display = 'none';
+                    this.animate();
+                    this.log('Инициализация завершена. Движок активен.');
+                }
+
+                setupRenderer() {
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                    this.renderer.setPixelRatio(window.devicePixelRatio);
+                    window.addEventListener('resize', () => {
+                        this.camera.aspect = window.innerWidth / window.innerHeight;
+                        this.camera.updateProjectionMatrix();
+                        this.renderer.setSize(window.innerWidth, window.innerHeight);
+                        this.composer.setSize(window.innerWidth, window.innerHeight);
+                    });
+                }
+
+                async setupMedia() {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true });
+                    this.video.srcObject = stream;
+                    this.video.play();
+                    
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const source = this.audioCtx.createMediaStreamSource(stream);
+                    this.analyser = this.audioCtx.createAnalyser();
+                    this.analyser.fftSize = 256;
+                    source.connect(this.analyser);
+                    this.audioData = new Uint8Array(this.analyser.frequencyBinCount);
+                }
+
+                async setupSegmentation() {
+                    this.segmentation = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
+                    this.segmentation.setOptions({ modelSelection: 1 });
+                    this.segmentation.onResults((results) => {
+                        this.updateMask(results);
+                    });
+                    
+                    const camera = new Camera(this.video, {
+                        onFrame: async () => await this.segmentation.send({ image: this.video }),
+                        width: 1280, height: 720
+                    });
+                    await camera.start();
+                }
+
+                // --- Создание сцены ---
+                setupScene() {
+                    this.camera.position.z = 5;
+
+                    // Текстура с видеопотока
+                    this.personVideoTexture = new THREE.VideoTexture(this.video);
+                    this.personVideoTexture.minFilter = THREE.LinearFilter;
+                    this.personVideoTexture.magFilter = THREE.LinearFilter;
+
+                    // Текстура для маски сегментации (пустая пока)
+                    this.personMaskTexture = new THREE.CanvasTexture(document.createElement('canvas'));
+                    
+                    // Задний план (вихрь)
+                    const backgroundGeometry = new THREE.PlaneGeometry(20, 10);
+                    const backgroundMaterial = new THREE.ShaderMaterial({
+                        uniforms: { time: { value: 1.0 } },
+                        vertexShader: `
+                            varying vec2 vUv;
+                            void main() {
+                                vUv = uv;
+                                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                            }
+                        `,
+                        fragmentShader: `
+                            uniform float time;
+                            varying vec2 vUv;
+                            void main() {
+                                vec2 p = -1.0 + 2.0 * vUv;
+                                float a = atan(p.y, p.x);
+                                float r = length(p) * 0.75;
+                                vec2 uv = vec2(a / (2.0 * 3.14159), r);
+                                float f = sin(uv.x * 20.0 + time * 2.0) * sin(uv.y * 10.0 + time) * 0.5 + 0.5;
+                                gl_FragColor = vec4(f * 0.5, 0.0, f * 0.2, 1.0);
+                            }
+                        `
+                    });
+                    this.backgroundPlane = new THREE.Mesh(backgroundGeometry, backgroundMaterial);
+                    this.backgroundPlane.position.z = -1;
+                    this.scene.add(this.backgroundPlane);
+
+                    // Плоскость с человеком
+                    const personGeometry = new THREE.PlaneGeometry(16, 9);
+                    const personMaterial = new THREE.MeshBasicMaterial({
+                        map: this.personVideoTexture,
+                        alphaMap: this.personMaskTexture, // Маска определяет прозрачность
+                        transparent: true,
+                    });
+                    this.personPlane = new THREE.Mesh(personGeometry, personMaterial);
+                    this.scene.add(this.personPlane);
+                }
+
+                // --- Пост-обработка ---
+                setupPostProcessing() {
+                    const renderPass = new RenderPass(this.scene, this.camera);
+                    this.composer.addPass(renderPass);
+
+                    // Свечение
+                    this.bloomPass.threshold = 0;
+                    this.bloomPass.strength = 0.5;
+                    this.bloomPass.radius = 0;
+                    this.composer.addPass(this.bloomPass);
+
+                    // Эффект "шлейфа"
+                    this.afterimagePass.uniforms.damp.value = 0.8;
+                    this.composer.addPass(this.afterimagePass);
+
+                    // Эффект контуров
+                    this.sobelPass.uniforms['resolution'].value.x = window.innerWidth * window.devicePixelRatio;
+                    this.sobelPass.uniforms['resolution'].value.y = window.innerHeight * window.devicePixelRatio;
+                    this.composer.addPass(this.sobelPass);
+                }
+
+                // --- Обновление и отрисовка ---
+                updateMask(segmentationResults) {
+                    const maskCanvas = this.personMaskTexture.image;
+                    const maskCtx = maskCanvas.getContext('2d');
+                    
+                    maskCanvas.width = segmentationResults.segmentationMask.width;
+                    maskCanvas.height = segmentationResults.segmentationMask.height;
+
+                    maskCtx.filter = 'blur(5px)'; // Сглаживаем края
+                    maskCtx.drawImage(segmentationResults.segmentationMask, 0, 0);
+                    maskCtx.filter = 'none';
+                    
+                    this.personMaskTexture.needsUpdate = true;
+                }
+                
+                animate() {
+                    requestAnimationFrame(() => this.animate());
+
+                    const delta = this.clock.getDelta();
+                    this.backgroundPlane.material.uniforms.time.value += delta;
+                    
+                    if (this.analyser) {
+                        this.analyser.getByteFrequencyData(this.audioData);
+                        const volume = this.audioData.reduce((a, b) => a + b, 0) / this.audioData.length;
+                        
+                        // Громкость влияет на силу эффектов
+                        this.afterimagePass.uniforms.damp.value = Math.max(0.6, 0.95 - (volume / 255.0) * 0.5);
+                        this.bloomPass.strength = 0.5 + (volume / 255.0) * 2.0;
+                    }
+
+                    this.composer.render();
+                }
+            }
+
+            // --- Точка входа ---
+            window.engine = new PsychoreactiveEngine();
+            engine.initialize().catch(err => {
+                engine.showLoader(`КРИТИЧЕСКАЯ ОШИБКА: ${err.message}`);
+                console.error(err);
+            });
+        <\/script>
+    </body>
+    </html>
+</script>
+
+<script>
+    document.getElementById('launch-button').addEventListener('click', () => {
+        const button = document.getElementById('launch-button');
+        try {
+            button.textContent = 'ЗАГРУЗКА...';
+            const payloadHTML = document.getElementById('horror-payload').innerHTML;
+            const blob = new Blob([payloadHTML], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const horrorWindow = window.open(url, '_blank');
+            if (!horrorWindow) throw new Error("Всплывающее окно заблокировано.");
+            button.textContent = 'АКТИВИРОВАНО';
+            button.disabled = true;
+            button.style.cursor = 'default';
+        } catch (err) {
+            button.textContent = 'ОШИБКА';
+            alert('Не удалось открыть новое окно. Пожалуйста, разрешите всплывающие окна и попробуйте снова.');
+        }
+    });
+</script>
+
+</body>
+</html>
